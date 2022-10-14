@@ -1,5 +1,6 @@
 use super::*;
 
+use std::task::{Context, Waker};
 use std::usize;
 
 #[derive(Debug)]
@@ -41,6 +42,11 @@ pub(super) struct Counts {
     /// Total number of locally reset streams due to protocol error across the
     /// lifetime of the connection.
     num_local_error_reset_streams: usize,
+
+    /// If remote settings were applied
+    remote_settings_applied: bool,
+
+    remote_settings_applied_task: Option<Waker>,
 }
 
 impl Counts {
@@ -58,6 +64,8 @@ impl Counts {
             num_remote_reset_streams: 0,
             max_local_error_reset_streams: config.local_max_error_reset_streams,
             num_local_error_reset_streams: 0,
+            remote_settings_applied: false,
+            remote_settings_applied_task: None,
         }
     }
 
@@ -185,6 +193,8 @@ impl Counts {
             None if is_initial => self.max_send_streams = usize::MAX,
             None => {}
         }
+        self.remote_settings_applied = true;
+        self.notify_remote_settings_applied()
     }
 
     /// Run a block of code that could potentially transition a stream's state.
@@ -250,6 +260,16 @@ impl Counts {
         self.max_send_streams
     }
 
+    /// Returns if remote settings were applied
+    pub(crate) fn remote_settings_applied(&self) -> bool {
+        self.remote_settings_applied
+    }
+
+    /// Sets waker task for remote settings being set
+    pub(crate) fn wait_remote_settings_applied(&mut self, cx: &Context) {
+        self.remote_settings_applied_task = Some(cx.waker().clone());
+    }
+
     /// Returns the maximum number of streams that can be initiated by the
     /// remote peer.
     pub(crate) fn max_recv_streams(&self) -> usize {
@@ -273,6 +293,12 @@ impl Counts {
     fn dec_num_reset_streams(&mut self) {
         assert!(self.num_local_reset_streams > 0);
         self.num_local_reset_streams -= 1;
+    }
+
+    fn notify_remote_settings_applied(&mut self) {
+        if let Some(task) = self.remote_settings_applied_task.take() {
+            task.wake();
+        }
     }
 }
 
